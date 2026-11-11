@@ -12,6 +12,8 @@ export interface MerchantConfig {
   maxConcurrentPayments: number;
   paymentTimeoutSeconds: number;
   mockMode: boolean;
+  webhookSecret: string;
+  webhookUrl?: string;
 }
 
 export type PaymentStatus = 
@@ -20,7 +22,9 @@ export type PaymentStatus =
   | 'PAID'
   | 'EXPIRED'
   | 'FAILED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'REFUNDED'
+  | 'PARTIALLY_REFUNDED';
 
 export type PaymentMethod = 'UPI_QR' | 'UPI_INTENT' | 'CASH' | 'CARD_EDC' | 'COD';
 
@@ -45,6 +49,21 @@ export interface PaymentSession {
   metadata?: Record<string, any>;
   observedByCompanion?: boolean;
   companionObservationNote?: string;
+  refundedAmount?: number;
+  refunds?: RefundRecord[];
+}
+
+export interface RefundRecord {
+  id: string;
+  sessionId: string;
+  merchantId: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  status: 'PROCESSED' | 'FAILED';
+  idempotencyKey?: string;
+  createdAt: number;
+  rrn?: string;
 }
 
 export interface QueueStatus {
@@ -96,6 +115,7 @@ export type CODStatus =
 export interface CODOrder {
   id: string;
   orderId: string;
+  merchantId: string;
   customerName: string;
   phone: string;
   deliveryAddress: string;
@@ -116,6 +136,7 @@ export interface CODOrder {
 export interface POSTransaction {
   id: string;
   receiptNumber: string;
+  merchantId: string;
   cashierName: string;
   items: { name: string; qty: number; price: number }[];
   subtotal: number;
@@ -150,4 +171,48 @@ export interface TestResult {
   passed: boolean;
   durationMs: number;
   details: string;
+}
+
+export interface SystemHealthState {
+  application: {
+    status: 'HEALTHY' | 'DEGRADED';
+    version: string;
+    nodeVersion: string;
+    uptimeSeconds: number;
+    activeSessions: number;
+  };
+  database: {
+    status: 'CONNECTED';
+    engine: 'IN_MEMORY_PERSISTENT_STORE';
+    integrityCheck: 'PASSED';
+    totalRecords: number;
+  };
+  redis: {
+    status: 'CONNECTED' | 'DISCONNECTED' | 'DEGRADED';
+    mode: string;
+    latencyMs: number;
+    totalKeys: number;
+  };
+  workers: {
+    queueWatchdog: 'RUNNING';
+    webhookDispatcher: 'IDLE' | 'ACTIVE';
+    lastHeartbeat: string;
+  };
+  paymentProvider: {
+    name: 'NPCI UPI Sandbox / Mock Gateway';
+    status: 'ONLINE';
+    circuitBreaker: 'CLOSED';
+  };
+}
+
+export interface SecurityAuditItem {
+  id: string;
+  name: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  category: string;
+  affectedFile: string;
+  explanation: string;
+  fixApplied: string;
+  testPerformed: string;
+  status: 'RESOLVED' | 'VERIFIED';
 }

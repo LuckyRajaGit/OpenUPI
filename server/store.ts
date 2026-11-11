@@ -6,32 +6,22 @@ import {
   CODOrder,
   POSTransaction,
   EDCTerminalState,
+  RefundRecord,
 } from '../src/types/index.ts';
 
 class DatabaseStore {
-  public merchant: MerchantConfig = {
-    id: 'mer_openupi_01',
-    name: 'Acme Retail & Tech Ltd',
-    vpa: 'acmeretail@upi',
-    apiKey: 'oup_test_8f294ba713cd4109b8',
-    primaryColor: '#0284c7',
-    logoUrl: 'https://images.unsplash.com/photo-1556742049-0a67c5574f73?w=128&auto=format&fit=crop&q=80',
-    supportEmail: 'payments@acmeretail.in',
-    supportPhone: '+91 80 4920 1200',
-    customDomain: 'pay.acmeretail.in',
-    domainVerified: true,
-    maxConcurrentPayments: 3,
-    paymentTimeoutSeconds: 300,
-    mockMode: true,
-  };
+  // Multi-Tenant Merchant Registry
+  public merchants: Map<string, MerchantConfig> = new Map();
 
   public sessions: Map<string, PaymentSession> = new Map();
   public queue: string[] = []; // Session IDs waiting for slot
   public activeProcessing: Set<string> = new Set(); // Session IDs actively occupying concurrency slot
   public idempotencyKeys: Map<string, string> = new Map(); // key -> sessionId
 
+  // Refunds store
+  public refunds: Map<string, RefundRecord> = new Map();
+
   // Auth: Customer Phone Challenges (Strictly Server-Side)
-  // Maps challengeId -> { phone, otpHash, rawOtpForMockEnv, expiresAt, verified }
   public phoneChallenges: Map<
     string,
     {
@@ -69,6 +59,7 @@ class DatabaseStore {
   // Webhooks
   public webhookLogs: Array<{
     id: string;
+    merchantId: string;
     event: string;
     payload: any;
     status: number;
@@ -76,11 +67,82 @@ class DatabaseStore {
     signature: string;
   }> = [];
 
+  // Failed Requests & Webhook Errors for Developer Debugging
+  public failedPayments: Array<{
+    id: string;
+    orderId: string;
+    merchantId: string;
+    amount: number;
+    reason: string;
+    timestamp: number;
+    requestId?: string;
+  }> = [];
+
+  public failedWebhooks: Array<{
+    id: string;
+    event: string;
+    merchantId: string;
+    url: string;
+    error: string;
+    timestamp: number;
+    retryCount: number;
+    payload: any;
+  }> = [];
+
   constructor() {
     this.seedInitialData();
   }
 
+  // Active default merchant getter (for backwards-compatibility in single-merchant views)
+  public get merchant(): MerchantConfig {
+    return this.merchants.get('mer_openupi_01')!;
+  }
+
+  public set merchant(config: MerchantConfig) {
+    this.merchants.set(config.id, config);
+  }
+
   private seedInitialData() {
+    // 1. Primary Merchant
+    const m1: MerchantConfig = {
+      id: 'mer_openupi_01',
+      name: 'Acme Retail & Tech Ltd',
+      vpa: 'acmeretail@upi',
+      apiKey: 'oup_test_8f294ba713cd4109b8',
+      webhookSecret: 'whsec_a891f7c239401829e1',
+      primaryColor: '#0284c7',
+      logoUrl: 'https://images.unsplash.com/photo-1556742049-0a67c5574f73?w=128&auto=format&fit=crop&q=80',
+      supportEmail: 'payments@acmeretail.in',
+      supportPhone: '+91 80 4920 1200',
+      customDomain: 'pay.acmeretail.in',
+      domainVerified: true,
+      maxConcurrentPayments: 3,
+      paymentTimeoutSeconds: 300,
+      mockMode: true,
+      webhookUrl: 'https://merchant.example.com/api/webhooks',
+    };
+    this.merchants.set(m1.id, m1);
+
+    // 2. Secondary Isolated Merchant (For multi-tenant isolation testing)
+    const m2: MerchantConfig = {
+      id: 'mer_isolated_02',
+      name: 'Zenith Organic Botanicals',
+      vpa: 'zenithbotanicals@upi',
+      apiKey: 'oup_test_zenith_91b72a4805c31f',
+      webhookSecret: 'whsec_zenith_5521b44781',
+      primaryColor: '#059669',
+      logoUrl: '',
+      supportEmail: 'care@zenithbotanicals.in',
+      supportPhone: '+91 80 8820 4400',
+      customDomain: 'pay.zenithbotanicals.in',
+      domainVerified: true,
+      maxConcurrentPayments: 5,
+      paymentTimeoutSeconds: 300,
+      mockMode: true,
+      webhookUrl: 'https://zenith.example.com/webhooks/upi',
+    };
+    this.merchants.set(m2.id, m2);
+
     // Seed initial Android Device
     const devId = 'AND-NODE-KOTLIN-01';
     this.androidDevices.set(devId, {
@@ -118,11 +180,12 @@ class DatabaseStore {
         'Companion notification signals intent arrival. Settlement requires core bank webhook reconciliation.',
     });
 
-    // Seed Sample COD Orders
+    // Seed Sample COD Orders with merchantId
     const cod1Id = 'COD-ORD-101';
     this.codOrders.set(cod1Id, {
       id: 'cod_rec_101',
       orderId: cod1Id,
+      merchantId: 'mer_openupi_01',
       customerName: 'Priya Mukherjee',
       phone: '+91 98201 44521',
       deliveryAddress: 'Flat 402, Green Glen Heights, Bellandur, Bengaluru',
@@ -138,29 +201,11 @@ class DatabaseStore {
       createdAt: Date.now() - 7200000,
     });
 
-    const cod2Id = 'COD-ORD-102';
-    this.codOrders.set(cod2Id, {
-      id: 'cod_rec_102',
-      orderId: cod2Id,
-      customerName: 'Rohan Mehra',
-      phone: '+91 97110 88231',
-      deliveryAddress: 'B-12, Sector 44, Gurgaon, Haryana',
-      pincode: '122003',
-      items: [{ name: 'Artisan Brass Filter Coffee Maker', quantity: 1, price: 1250 }],
-      itemTotal: 1250,
-      codFee: 50,
-      totalAmount: 1300,
-      status: 'DISPATCHED',
-      createdAt: Date.now() - 86400000,
-      approvedAt: Date.now() - 80000000,
-      courierPartner: 'Delhivery Surface Express',
-      trackingNumber: 'DLV99420815IN',
-    });
-
     // Seed Sample POS Transaction
     this.posTransactions.push({
       id: 'pos_txn_401',
       receiptNumber: 'RCP-2026-00401',
+      merchantId: 'mer_openupi_01',
       cashierName: 'Aarav Sharma (Counter 02)',
       items: [
         { name: 'Espresso Roast Beans 500g', qty: 1, price: 650 },
@@ -183,6 +228,21 @@ class DatabaseStore {
     });
   }
 
+  // Merchant Lookup Methods
+  public getMerchant(merchantId: string): MerchantConfig | undefined {
+    return this.merchants.get(merchantId);
+  }
+
+  public getMerchantByApiKey(apiKey: string): MerchantConfig | undefined {
+    const cleanKey = apiKey.replace(/^Bearer\s+/i, '').trim();
+    for (const m of this.merchants.values()) {
+      if (m.apiKey === cleanKey) {
+        return m;
+      }
+    }
+    return undefined;
+  }
+
   // Session Helper Methods
   public createSession(session: PaymentSession): PaymentSession {
     this.sessions.set(session.id, session);
@@ -202,6 +262,64 @@ class DatabaseStore {
     const updated = { ...existing, ...updates };
     this.sessions.set(id, updated);
     return updated;
+  }
+
+  public getSessionsByMerchant(merchantId: string): PaymentSession[] {
+    return Array.from(this.sessions.values())
+      .filter((s) => s.merchantId === merchantId)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  // Refund Helper Methods
+  public createRefund(refund: RefundRecord): RefundRecord {
+    this.refunds.set(refund.id, refund);
+    const session = this.sessions.get(refund.sessionId);
+    if (session) {
+      session.refundedAmount = (session.refundedAmount || 0) + refund.amount;
+      session.refunds = session.refunds || [];
+      session.refunds.push(refund);
+      session.status = session.refundedAmount >= session.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+      this.sessions.set(session.id, session);
+    }
+    return refund;
+  }
+
+  public getRefundsByMerchant(merchantId: string): RefundRecord[] {
+    return Array.from(this.refunds.values())
+      .filter((r) => r.merchantId === merchantId)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  // Failed Transaction Recording for Debugging
+  public recordFailedPayment(entry: {
+    orderId: string;
+    merchantId: string;
+    amount: number;
+    reason: string;
+    requestId?: string;
+  }) {
+    this.failedPayments.unshift({
+      id: 'fail_' + Date.now().toString().slice(-6),
+      ...entry,
+      timestamp: Date.now(),
+    });
+    if (this.failedPayments.length > 100) this.failedPayments.pop();
+  }
+
+  public recordFailedWebhook(entry: {
+    event: string;
+    merchantId: string;
+    url: string;
+    error: string;
+    payload: any;
+  }) {
+    this.failedWebhooks.unshift({
+      id: 'wh_fail_' + Date.now().toString().slice(-6),
+      ...entry,
+      timestamp: Date.now(),
+      retryCount: 0,
+    });
+    if (this.failedWebhooks.length > 100) this.failedWebhooks.pop();
   }
 }
 

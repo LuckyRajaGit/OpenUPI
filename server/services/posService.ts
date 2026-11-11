@@ -8,6 +8,7 @@ export class POSService {
    */
   public static recordTransaction(params: {
     cashierName?: string;
+    merchantId?: string;
     items: { name: string; qty: number; price: number }[];
     splitTender: {
       cashAmount: number;
@@ -29,6 +30,7 @@ export class POSService {
     const transaction: POSTransaction = {
       id: 'pos_' + crypto.randomBytes(6).toString('hex'),
       receiptNumber,
+      merchantId: params.merchantId || db.merchant.id,
       cashierName: params.cashierName || db.cashRegister.currentShiftCashier,
       items: params.items,
       subtotal,

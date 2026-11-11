@@ -1,15 +1,17 @@
 import React from 'react';
-import { ShieldCheck, PlayCircle, ShoppingBag, ExternalLink } from 'lucide-react';
+import { ShieldAlert, Globe, ShoppingBag, Terminal } from 'lucide-react';
 
 interface NavbarProps {
   onOpenStore: () => void;
-  onRunTests: () => void;
+  onRunSecurityTests: () => void;
+  onOpenWizard: () => void;
   mockMode: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   onOpenStore,
-  onRunTests,
+  onRunSecurityTests,
+  onOpenWizard,
   mockMode,
 }) => {
   return (
@@ -36,8 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           Gateway Core: Active
         </span>
         <span className="text-slate-700">·</span>
-        <span className="flex items-center gap-1.5 whitespace-nowrap">
-          <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+        <span className="text-xs text-slate-400 whitespace-nowrap">
           {mockMode ? 'Mock Sandbox Mode' : 'Live Provider Connected'}
         </span>
         <span className="text-slate-700">·</span>
@@ -49,18 +50,25 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Zone 3: 1-2 primary actions */}
       <div className="flex items-center gap-3 shrink-0">
         <button
-          onClick={onOpenStore}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+          onClick={onOpenWizard}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-800/60 rounded-lg transition-colors whitespace-nowrap"
         >
-          <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
-          Demo Merchant Store
+          <Globe className="w-3.5 h-3.5 text-emerald-400" />
+          Integration Wizard
         </button>
         <button
-          onClick={onRunTests}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 rounded-lg shadow-sm shadow-sky-600/30 transition-colors whitespace-nowrap"
+          onClick={onOpenStore}
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
         >
-          <PlayCircle className="w-3.5 h-3.5" />
-          Run All 9 Tests
+          <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
+          Demo Store
+        </button>
+        <button
+          onClick={onRunSecurityTests}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow-sm shadow-rose-600/30 transition-colors whitespace-nowrap"
+        >
+          <ShieldAlert className="w-3.5 h-3.5" />
+          Run Security Tests
         </button>
       </div>
     </header>

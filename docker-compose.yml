@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  openupi-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openupi_gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - MOCK_MODE=true
+    depends_on:
+      - redis
+    networks:
+      - openupi-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: openupi_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - openupi-net
+
+networks:
+  openupi-net:
+    driver: bridge
+
+volumes:
+  redis-data:

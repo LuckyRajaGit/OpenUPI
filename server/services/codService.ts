@@ -12,6 +12,7 @@ export class CODService {
     phone: string;
     deliveryAddress: string;
     pincode: string;
+    merchantId?: string;
     items: { name: string; quantity: number; price: number }[];
     codFee?: number;
   }): CODOrder {
@@ -22,6 +23,7 @@ export class CODService {
     const newOrder: CODOrder = {
       id: 'cod_' + crypto.randomBytes(6).toString('hex'),
       orderId: params.orderId,
+      merchantId: params.merchantId || db.merchant.id,
       customerName: params.customerName,
       phone: params.phone,
       deliveryAddress: params.deliveryAddress,

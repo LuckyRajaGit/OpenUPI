@@ -3,6 +3,9 @@ import crypto from 'crypto';
 import { db } from '../store.ts';
 import { PaymentSession } from '../../src/types/index.ts';
 import { QueueService } from './queueService.ts';
+import { WebhookService } from './webhookService.ts';
+import { logger } from './loggerService.ts';
+import { redis } from './redisService.ts';
 
 export class QRService {
   /**
@@ -39,9 +42,10 @@ export class QRService {
   }
 
   /**
-   * Create dynamic QR payment session with database tracking and queue limit check
+   * Create dynamic QR payment session with database tracking, input validation, and idempotency checks
    */
   public static async createPaymentSession(params: {
+    merchantId?: string;
     orderId: string;
     amount: number;
     currency?: string;
@@ -56,9 +60,34 @@ export class QRService {
     intents: ReturnType<typeof QRService.generateAppIntents>;
     isDuplicateReuse?: boolean;
   }> {
-    // 1. Idempotency & duplicate check
-    const dupCheck = QueueService.checkDuplicate(params.orderId, params.idempotencyKey);
+    const merchantId = params.merchantId || db.merchant.id;
+    const merchant = db.getMerchant(merchantId) || db.merchant;
+
+    // 1. Strict Input Validation (NPCI & Banking Rules)
+    const rawAmount = Number(params.amount);
+    if (isNaN(rawAmount) || rawAmount < 1.0) {
+      throw new Error('Invalid payment amount: Minimum transaction is ₹1.00');
+    }
+    if (rawAmount > 100000.0) {
+      throw new Error('Invalid payment amount: Exceeds NPCI maximum UPI limit of ₹100,000.00');
+    }
+    const cleanAmount = Math.round(rawAmount * 100) / 100;
+
+    const cleanOrderId = (params.orderId || '').trim();
+    if (!cleanOrderId || cleanOrderId.length < 2 || cleanOrderId.length > 64) {
+      throw new Error('Invalid order ID: Must be between 2 and 64 alphanumeric characters');
+    }
+
+    // 2. Idempotency & duplicate check
+    const dupCheck = QueueService.checkDuplicate(cleanOrderId, params.idempotencyKey);
     if (dupCheck.isDuplicate && dupCheck.existingSession) {
+      // Amount manipulation prevention check!
+      if (Math.abs(dupCheck.existingSession.amount - cleanAmount) > 0.001) {
+        throw new Error(
+          `Amount Tampering Detected: Order ${cleanOrderId} was originally initialized with ₹${dupCheck.existingSession.amount.toFixed(2)}, cannot be altered to ₹${cleanAmount.toFixed(2)}.`
+        );
+      }
+
       const intents = this.generateAppIntents(dupCheck.existingSession.upiUri);
       return {
         session: dupCheck.existingSession,
@@ -69,15 +98,15 @@ export class QRService {
 
     const sessionId = 'ses_' + crypto.randomBytes(8).toString('hex');
     const txnRef = 'OUP' + Date.now().toString().slice(-8) + crypto.randomBytes(2).toString('hex').toUpperCase();
-    const expiresAt = Date.now() + (db.merchant.paymentTimeoutSeconds * 1000);
+    const expiresAt = Date.now() + (merchant.paymentTimeoutSeconds * 1000);
 
     const upiUri = this.generateUpiUri({
-      vpa: db.merchant.vpa,
-      merchantName: db.merchant.name,
-      amount: params.amount,
+      vpa: merchant.vpa,
+      merchantName: merchant.name,
+      amount: cleanAmount,
       transactionRef: txnRef,
-      orderId: params.orderId,
-      note: `Payment for Order ${params.orderId}`,
+      orderId: cleanOrderId,
+      note: `Payment for Order ${cleanOrderId}`,
     });
 
     // Generate crisp QR code data URL (SVG / PNG data URL)
@@ -93,9 +122,9 @@ export class QRService {
 
     const newSession: PaymentSession = {
       id: sessionId,
-      orderId: params.orderId,
-      merchantId: db.merchant.id,
-      amount: params.amount,
+      orderId: cleanOrderId,
+      merchantId: merchant.id,
+      amount: cleanAmount,
       currency: params.currency || 'INR',
       customerName: params.customerName,
       customerPhone: params.customerPhone,
@@ -118,6 +147,13 @@ export class QRService {
 
     const intents = this.generateAppIntents(upiUri);
 
+    logger.info('PAYMENT_SESSION', `Created session ${sessionId} for order ${cleanOrderId} (₹${cleanAmount})`, {
+      sessionId,
+      orderId: cleanOrderId,
+      merchantId: merchant.id,
+      amount: cleanAmount,
+    });
+
     return {
       session: newSession,
       intents,
@@ -125,41 +161,108 @@ export class QRService {
   }
 
   /**
-   * Mark session as settled / paid (Mock Payment Provider or Bank Webhook)
+   * Mark session as settled / paid with ATOMIC MUTEX LOCK to prevent double-spending race conditions
    */
-  public static markAsPaid(sessionId: string, method: string = 'UPI'): PaymentSession | null {
-    const session = db.getSession(sessionId);
-    if (!session) return null;
-
-    if (session.status === 'PAID') {
-      return session;
+  public static markAsPaid(sessionId: string, method: string = 'UPI'): { session: PaymentSession | null; error?: string } {
+    // Acquire atomic distributed lock for this session
+    const lockAcquired = redis.acquireLock(`settle:${sessionId}`, 10);
+    if (!lockAcquired) {
+      return {
+        session: null,
+        error: 'Race condition detected: Simultaneous settlement request in progress for this payment session.',
+      };
     }
 
-    const updated = db.updateSession(sessionId, {
-      status: 'PAID',
-      paidAt: Date.now(),
-      queuePosition: 0,
-    });
+    try {
+      const session = db.getSession(sessionId);
+      if (!session) {
+        return { session: null, error: 'Payment session not found' };
+      }
 
-    if (updated) {
-      QueueService.releaseSlot(sessionId);
-      
-      // Dispatch Webhook event
-      db.webhookLogs.unshift({
-        id: 'wh_' + crypto.randomBytes(6).toString('hex'),
-        event: 'payment.success',
-        payload: {
+      // If already settled, idempotently return existing settled state without duplicate execution
+      if (session.status === 'PAID') {
+        return { session };
+      }
+
+      // Enforce strict state machine: cannot mark EXPIRED or CANCELLED as PAID
+      if (session.status === 'EXPIRED') {
+        return { session: null, error: 'Cannot settle expired payment session' };
+      }
+      if (session.status === 'CANCELLED') {
+        return { session: null, error: 'Cannot settle cancelled payment session' };
+      }
+      if (session.status === 'FAILED') {
+        return { session: null, error: 'Cannot settle failed payment session' };
+      }
+
+      const updated = db.updateSession(sessionId, {
+        status: 'PAID',
+        paidAt: Date.now(),
+        queuePosition: 0,
+      });
+
+      if (updated) {
+        QueueService.releaseSlot(sessionId);
+
+        logger.info('PAYMENT_SETTLED', `Settled session ${sessionId} for order ${updated.orderId} (₹${updated.amount})`, {
+          sessionId,
+          orderId: updated.orderId,
+          merchantId: updated.merchantId,
+          amount: updated.amount,
+          method,
+        });
+
+        // Dispatch Signed Webhook Event to Merchant
+        WebhookService.dispatchEvent(updated.merchantId, 'payment.success', {
+          event: 'payment.success',
           sessionId: updated.id,
           orderId: updated.orderId,
+          merchantId: updated.merchantId,
           amount: updated.amount,
           currency: updated.currency,
           paidAt: updated.paidAt,
           method,
           customerPhone: updated.customerPhone,
-        },
-        status: 200,
-        timestamp: Date.now(),
-        signature: 'sha256_mock_sig_' + crypto.randomBytes(8).toString('hex'),
+        });
+      }
+
+      return { session: updated || null };
+    } finally {
+      redis.releaseLock(`settle:${sessionId}`);
+    }
+  }
+
+  /**
+   * Mark session as failed (e.g., bank declined or customer rejected)
+   */
+  public static markAsFailed(sessionId: string, reason: string): PaymentSession | null {
+    const session = db.getSession(sessionId);
+    if (!session) return null;
+
+    if (session.status === 'PAID') {
+      logger.warn('PAYMENT_FAIL', `Attempted to fail an already settled payment (${sessionId}). Operation rejected.`);
+      return session; // A paid payment cannot be marked failed
+    }
+
+    const updated = db.updateSession(sessionId, {
+      status: 'FAILED',
+    });
+
+    if (updated) {
+      QueueService.releaseSlot(sessionId);
+      db.recordFailedPayment({
+        orderId: updated.orderId,
+        merchantId: updated.merchantId,
+        amount: updated.amount,
+        reason,
+      });
+
+      WebhookService.dispatchEvent(updated.merchantId, 'payment.failed', {
+        event: 'payment.failed',
+        sessionId: updated.id,
+        orderId: updated.orderId,
+        amount: updated.amount,
+        reason,
       });
     }
 

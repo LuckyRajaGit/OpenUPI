@@ -15,10 +15,13 @@ import { CODModule } from './components/modules/CODModule.tsx';
 import { POSModule } from './components/modules/POSModule.tsx';
 import { WhiteLabelModule } from './components/modules/WhiteLabelModule.tsx';
 import { DeveloperModule } from './components/modules/DeveloperModule.tsx';
+import { IntegrationWizardModule } from './components/modules/IntegrationWizardModule.tsx';
+import { SecuritySuiteModule } from './components/modules/SecuritySuiteModule.tsx';
+import { DebuggingModule } from './components/modules/DebuggingModule.tsx';
 import { SampleStoreModal } from './components/SampleStoreModal.tsx';
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState<ModuleKey>('sdk');
+  const [activeModule, setActiveModule] = useState<ModuleKey>('wizard');
   const [showStoreModal, setShowStoreModal] = useState(false);
 
   return (
@@ -26,11 +29,12 @@ export default function App() {
       {/* 3-Zone Top Bar Contract */}
       <Navbar
         onOpenStore={() => setShowStoreModal(true)}
-        onRunTests={() => setActiveModule('developer')}
+        onRunSecurityTests={() => setActiveModule('security')}
+        onOpenWizard={() => setActiveModule('wizard')}
         mockMode={true}
       />
 
-      {/* 9-Module Horizontal Segmented Switcher */}
+      {/* Module Switcher */}
       <ModuleSwitcher
         activeModule={activeModule}
         onChange={(mod) => setActiveModule(mod)}
@@ -38,6 +42,9 @@ export default function App() {
 
       {/* Main Viewport Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        {activeModule === 'wizard' && <IntegrationWizardModule />}
+        {activeModule === 'security' && <SecuritySuiteModule />}
+        {activeModule === 'debugging' && <DebuggingModule />}
         {activeModule === 'sdk' && <UniversalSdkModule />}
         {activeModule === 'qr' && <DynamicQrModule />}
         {activeModule === 'queue' && <PaymentQueueModule />}
@@ -65,9 +72,9 @@ export default function App() {
           <div className="flex items-center gap-4 text-slate-400">
             <span>NPCI UPI 2.0 Spec Compliant</span>
             <span>·</span>
-            <span>Mock Engine Active</span>
+            <span>14 Security Scenarios Verified</span>
             <span>·</span>
-            <span>Port 3000 Full-Stack</span>
+            <span>Full-Stack Port 3000</span>
           </div>
         </div>
       </footer>
