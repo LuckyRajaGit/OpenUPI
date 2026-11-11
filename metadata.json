@@ -1,0 +1,6 @@
+{
+  "name": "OpenUPI Gateway",
+  "description": "Modern self-hosted UPI checkout platform featuring Universal JS SDK, Dynamic QR, payment queue, POS terminal, Android companion, and white-label checkout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
